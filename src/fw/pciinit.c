@@ -66,6 +66,7 @@ struct pci_region {
     /* pci region assignments */
     u64 base;
     struct hlist_head list;
+    // pci_region的base成员表示这类BAR的起始地址，list成员用来链接所有这类BAR的设备
 };
 
 struct pci_bus {
@@ -88,6 +89,8 @@ static void
 pci_set_io_region_addr(struct pci_device *pci, int bar, u64 addr, int is64)
 {
     u32 ofs = pci_bar(pci, bar);
+    // pci_bar用来得到需要写入的BAR在PCI配置空间的地址，然后调用pci_config_writel
+    // 第一个outl用来选择设备，第二个outl用来写入数据。
     pci_config_writel(pci->bdf, ofs, addr);
     if (is64)
         pci_config_writel(pci->bdf, ofs + 4, addr >> 32);
@@ -1006,13 +1009,16 @@ static int pci_bios_init_root_regions_mem(struct pci_bus *bus)
 {
     struct pci_region *r_end = &bus->r[PCI_REGION_TYPE_PREFMEM];
     struct pci_region *r_start = &bus->r[PCI_REGION_TYPE_MEM];
-
+    // pci_region表示该虚拟机所有设备的某一类BAR（如PCI_REGION_TYPE_MEM表示mem BAR）
+    // pci_region的base成员表示这类BAR的起始地址，list成员用来链接所有这类BAR的设备
+    // pci_region_align会返回BAR中最大的align值，每个设备的BAR地址的alignment就是其大小。
     if (pci_region_align(r_start) < pci_region_align(r_end)) {
         // Swap regions to improve alignment.
+        // 这里首先比较align，大的尽量往前面放
         r_end = r_start;
         r_start = &bus->r[PCI_REGION_TYPE_PREFMEM];
     }
-    u64 sum = pci_region_sum(r_end);
+    u64 sum = pci_region_sum(r_end); //pci_region_sum返回某一类BAR的所有空间和，将pcimem_end设置为0xfec00000。
     u64 align = pci_region_align(r_end);
     r_end->base = ALIGN_DOWN((pcimem_end - sum), align);
     sum = pci_region_sum(r_start);
@@ -1038,7 +1044,7 @@ pci_region_map_one_entry(struct pci_region_entry *entry, u64 addr)
                 "  bar %d, addr %08llx, size %08llx [%s]\n",
                 entry->dev,
                 entry->bar, addr, entry->size, region_type_name[entry->type]);
-
+        // 得到需要写入的BAR在PCI配置空间的地址
         pci_set_io_region_addr(entry->dev, entry->bar, addr, entry->is64);
         return;
     }
@@ -1073,6 +1079,7 @@ static void pci_region_map_entries(struct pci_bus *busses, struct pci_region *r)
         if (entry->bar == -1)
             // Update bus base address if entry is a bridge region
             busses[entry->dev->secondary_bus].r[entry->type].base = addr;
+	// 设置每一项 基址 该函数调用pci_region_map_one_entry来完成每一项的设置
         pci_region_map_one_entry(entry, addr);
         hlist_del(&entry->node);
         free(entry);
@@ -1081,6 +1088,7 @@ static void pci_region_map_entries(struct pci_bus *busses, struct pci_region *r)
 
 static void pci_bios_map_devices(struct pci_bus *busses)
 {
+    // 先调用pci_bios_init_root_regions_io和pci_bios_init_root_regions_mem做初始化的工作，以mem为例
     if (pci_bios_init_root_regions_io(busses))
         panic("PCI: out of I/O address space\n");
 
@@ -1114,7 +1122,7 @@ static void pci_bios_map_devices(struct pci_bus *busses)
         pcimem64_end = r64_pref.base + sum_pref;
         pcimem64_end = ALIGN(pcimem64_end, (1LL<<30));    // 1G hugepage
         dprintf(1, "PCI: 64: %016llx - %016llx\n", pcimem64_start, pcimem64_end);
-
+        // 将每种BAR的基址算出来后就好处理了，调用pci_region_map_entries设置每个BAR的基址。该函数调用pci_region_map_one_entry来完成每一项的设置
         pci_region_map_entries(busses, &r64_mem);
         pci_region_map_entries(busses, &r64_pref);
     } else {
